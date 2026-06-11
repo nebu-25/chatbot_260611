@@ -283,10 +283,12 @@ else:
     if active_prompt:
         st.session_state.pending_prompt = None
 
-    # Image uploader
-    uploaded_file = st.file_uploader(
-        "이미지 첨부", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed"
-    )
+    # Image uploader (비율을 채팅바와 동일하게 맞춤)
+    col_upload, _ = st.columns([11, 1])
+    with col_upload:
+        uploaded_file = st.file_uploader(
+            "이미지 첨부", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed"
+        )
     if uploaded_file:
         image_bytes = uploaded_file.read()
         st.session_state.pending_image = {
