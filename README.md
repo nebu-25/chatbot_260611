@@ -6,7 +6,7 @@ A Streamlit chatbot app powered by OpenAI's GPT models.
 
 ## Features
 
-- **Model selection** — choose between GPT-4o, GPT-4o-mini, and GPT-3.5-turbo from the sidebar
+- **Model selection** — choose between GPT-5.4-mini (default), GPT-4o, GPT-4o-mini, and GPT-3.5-turbo from the sidebar
 - **Streaming responses** — assistant replies are streamed in real time
 - **Conversation history** — messages persist across reruns within a session
 - **Export chat** — download the conversation as a JSON or plain text file
