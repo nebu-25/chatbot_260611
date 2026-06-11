@@ -1,9 +1,67 @@
 import json
+import folium
 import streamlit as st
+from streamlit_folium import st_folium
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 from openai import OpenAI, AuthenticationError, RateLimitError, APIConnectionError, APIStatusError
 
-# Max messages kept in context before oldest pairs are trimmed
 MAX_MESSAGES = 20
+
+geolocator = Nominatim(user_agent="chatbot_260611")
+
+
+def extract_locations(client, text):
+    """Extract place names from assistant response using OpenAI."""
+    try:
+        result = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Extract all specific place names (restaurants, landmarks, cities, "
+                        "attractions, addresses) from the text. "
+                        'Return JSON in the format: {"places": ["place1", "place2"]}. '
+                        "If there are no place names, return {\"places\": []}."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(result.choices[0].message.content)
+        return data.get("places", [])
+    except Exception:
+        return []
+
+
+def geocode_place(name):
+    try:
+        location = geolocator.geocode(name, timeout=5)
+        if location:
+            return {"name": name, "lat": location.latitude, "lng": location.longitude}
+    except (GeocoderTimedOut, GeocoderServiceError):
+        pass
+    return None
+
+
+def render_map(locations):
+    lats = [p["lat"] for p in locations]
+    lngs = [p["lng"] for p in locations]
+    center = [sum(lats) / len(lats), sum(lngs) / len(lngs)]
+    zoom = 12 if len(locations) == 1 else 5
+
+    m = folium.Map(location=center, zoom_start=zoom)
+    for place in locations:
+        folium.Marker(
+            location=[place["lat"], place["lng"]],
+            tooltip=place["name"],
+            popup=folium.Popup(place["name"], max_width=200),
+            icon=folium.Icon(color="red", icon="map-marker"),
+        ).add_to(m)
+    return m
+
 
 st.title("💬 Chatbot")
 st.write(
@@ -54,7 +112,24 @@ else:
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "locations" not in st.session_state:
+        st.session_state.locations = []
 
+    # Map section
+    if st.session_state.locations:
+        with st.expander("Map", expanded=True):
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st_folium(render_map(st.session_state.locations), width=500, height=350, returned_objects=[])
+            with col2:
+                st.caption("Pinned places")
+                for place in st.session_state.locations:
+                    st.markdown(f"- {place['name']}")
+                if st.button("Clear pins"):
+                    st.session_state.locations = []
+                    st.rerun()
+
+    # Chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -64,7 +139,6 @@ else:
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Trim oldest message pairs when history exceeds MAX_MESSAGES
         if len(st.session_state.messages) > MAX_MESSAGES:
             st.session_state.messages = st.session_state.messages[-MAX_MESSAGES:]
 
@@ -81,6 +155,18 @@ else:
             with st.chat_message("assistant"):
                 response = st.write_stream(stream)
             st.session_state.messages.append({"role": "assistant", "content": response})
+
+            # Extract and geocode locations from response
+            new_places = extract_locations(client, response)
+            added = False
+            for place in new_places:
+                if not any(p["name"] == place for p in st.session_state.locations):
+                    geocoded = geocode_place(place)
+                    if geocoded:
+                        st.session_state.locations.append(geocoded)
+                        added = True
+            if added:
+                st.rerun()
 
         except AuthenticationError:
             st.error("Invalid API key. Please check your OpenAI API key and try again.", icon="🔑")
