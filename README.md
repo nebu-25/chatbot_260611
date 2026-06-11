@@ -1,4 +1,4 @@
-# ✈️ Travel Chatbot
+# Travel Chatbot
 
 An AI-powered travel assistant built with Streamlit and OpenAI's GPT models.
 
@@ -10,10 +10,10 @@ An AI-powered travel assistant built with Streamlit and OpenAI's GPT models.
 - **Language toggle** — switch between English and 한국어 from the sidebar; all UI and AI responses follow the selected language; API key is preserved across language switches
 - **Model selection** — choose between GPT-4o-mini (default), GPT-4o, and GPT-3.5-turbo
 - **Streaming responses** — assistant replies are streamed in real time via a background thread
-- **Stop generation** — click **⬛ Stop generating** to interrupt a response mid-stream; the partial reply is saved to the conversation history
+- **Stop generation** — click **Stop generating** to interrupt a response mid-stream; the partial reply is saved to the conversation history
 - **Voice input** — click the microphone button, speak, and the app transcribes your speech via OpenAI Whisper and sends it automatically
 - **Image input** — attach a JPG, PNG, or WebP image (auto-compressed to ≤1024px); GPT-4o / GPT-4o-mini will analyze it alongside your message
-- **Copy button** — every message has a 📋 popover to copy the text to clipboard
+- **Copy button** — every message has a copy popover to copy the text to clipboard
 - **Regenerate** — re-send the last user message for a fresh response
 - **Clear chat** — reset all messages, map pins, and attachments at once
 - **Conversation history** — messages persist across reruns within a session (last 20 kept)
@@ -68,7 +68,7 @@ To run locally:
 
 ## 이슈 관리
 
-### ✅ 해결된 이슈
+### 해결된 이슈
 
 | 날짜 | 이슈 | 해결 방법 |
 |---|---|---|
@@ -76,7 +76,7 @@ To run locally:
 | 2026-06-11 | `.gitignore`에 `.claude/` 항목 누락으로 내부 도구 파일 노출 위험 | `.gitignore` 업데이트 완료 |
 | 2026-06-11 | 언어 전환 시 OpenAI API 키가 초기화되는 버그 | 언어 토글 시 API 키 상태 유지하도록 수정 |
 
-### 🔶 알려진 이슈 (미해결)
+### 알려진 이슈 (미해결)
 
 | 우선순위 | 이슈 | 설명 |
 |---|---|---|
