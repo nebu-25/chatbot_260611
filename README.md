@@ -9,6 +9,7 @@ An AI-powered travel assistant built with Streamlit and OpenAI's GPT models.
 ### Chat
 - **Model selection** — choose between GPT-5.4-mini (default), GPT-4o, GPT-4o-mini, and GPT-3.5-turbo
 - **Streaming responses** — assistant replies are streamed in real time
+- **Voice input** — click the microphone button, speak, and the app transcribes your speech via OpenAI Whisper and sends it automatically
 - **Conversation history** — messages persist across reruns within a session
 - **Error handling** — user-friendly messages for invalid API key, rate limit, network, and API errors
 - **Conversation length limit** — automatically trims to the last 20 messages to prevent token limit errors
@@ -45,4 +46,4 @@ An AI-powered travel assistant built with Streamlit and OpenAI's GPT models.
 ## Requirements
 
 - Python 3.9+
-- OpenAI API key
+- OpenAI API key (Chat + Whisper 사용, Whisper는 약 $0.006/분)

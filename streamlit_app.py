@@ -1,6 +1,8 @@
+import io
 import json
 import folium
 import streamlit as st
+from audio_recorder_streamlit import audio_recorder
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
@@ -243,7 +245,26 @@ else:
     if active_prompt:
         st.session_state.pending_prompt = None
 
-    prompt = active_prompt or st.chat_input("Ask anything about travel...")
+    # Voice input
+    col_input, col_mic = st.columns([11, 1])
+    with col_input:
+        text_prompt = st.chat_input("Ask anything about travel...")
+    with col_mic:
+        audio_bytes = audio_recorder(text="", icon_size="lg", pause_threshold=2.0, key="mic")
+
+    if audio_bytes and audio_bytes != st.session_state.get("_last_audio"):
+        st.session_state["_last_audio"] = audio_bytes
+        with st.spinner("음성 인식 중..."):
+            buf = io.BytesIO(audio_bytes)
+            buf.name = "audio.wav"
+            try:
+                transcript = client.audio.transcriptions.create(model="whisper-1", file=buf)
+                st.session_state.pending_prompt = transcript.text
+            except Exception as e:
+                st.warning(f"음성 인식 실패: {e}")
+        st.rerun()
+
+    prompt = active_prompt or text_prompt
 
     if prompt:
         try:
