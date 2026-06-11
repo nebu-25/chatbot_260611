@@ -2,8 +2,11 @@ import base64
 import io
 import json
 import folium
+import requests
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
+from fpdf import FPDF
+from PIL import Image
 from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
@@ -11,6 +14,8 @@ from openai import OpenAI, AuthenticationError, RateLimitError, APIConnectionErr
 
 MAX_MESSAGES = 20
 VISION_MODELS = {"gpt-4o", "gpt-4o-mini"}
+IMAGE_MAX_PX = 1024
+CURRENCIES = ["USD", "EUR", "KRW", "JPY", "GBP", "CNY", "AUD", "CAD", "HKD", "SGD", "THB", "VND"]
 
 TRANSLATIONS = {
     "en": {
@@ -39,19 +44,29 @@ TRANSLATIONS = {
         "btn_restaurants": "Find restaurants & attractions",
         "btn_transport": "Transportation options",
         "warn_no_destination": "Please enter a destination first.",
+        "currency_header": "Currency Converter",
+        "currency_amount": "Amount",
+        "currency_from": "From",
+        "currency_to": "To",
+        "currency_result": "{amount:,.0f} {fc} = {result:,.2f} {tc}",
+        "currency_err": "Exchange rate unavailable.",
         "export_header": "Export Chat",
         "btn_download_json": "Download as JSON",
         "btn_download_txt": "Download as Text",
+        "btn_download_pdf": "Download as PDF",
         "no_messages": "No messages to export yet.",
+        "btn_clear_chat": "Clear chat",
         "map_label": "Map",
         "pinned_places": "Pinned places",
         "btn_clear_pins": "Clear pins",
         "chat_placeholder": "Ask anything about travel...",
         "img_attachment_label": "Attach image",
         "img_caption": "Attached image — will be sent with your message",
+        "img_compressed": "Image resized to {w}×{h} for upload",
         "spinner_voice": "Transcribing audio...",
         "warn_voice_fail": "Speech recognition failed: {e}",
         "warn_vision_model": "Image analysis is only supported with gpt-4o / gpt-4o-mini. (Current: {model})",
+        "btn_regenerate": "↺  Regenerate",
         "role_user": "User",
         "role_assistant": "Assistant",
         "img_note": " [Image attached]",
@@ -105,19 +120,29 @@ TRANSLATIONS = {
         "btn_restaurants": "맛집 & 관광지 찾기",
         "btn_transport": "교통 수단 안내",
         "warn_no_destination": "먼저 여행지를 입력해 주세요.",
+        "currency_header": "환율 계산기",
+        "currency_amount": "금액",
+        "currency_from": "통화",
+        "currency_to": "환전 통화",
+        "currency_result": "{amount:,.0f} {fc} = {result:,.2f} {tc}",
+        "currency_err": "환율 조회 실패.",
         "export_header": "대화 내보내기",
         "btn_download_json": "JSON으로 다운로드",
         "btn_download_txt": "텍스트로 다운로드",
+        "btn_download_pdf": "PDF로 다운로드",
         "no_messages": "내보낼 메시지가 없습니다.",
+        "btn_clear_chat": "대화 초기화",
         "map_label": "지도",
         "pinned_places": "핀 된 장소",
         "btn_clear_pins": "핀 지우기",
         "chat_placeholder": "여행에 대해 무엇이든 물어보세요...",
         "img_attachment_label": "이미지 첨부",
         "img_caption": "첨부된 이미지 — 메시지를 보내면 함께 전송됩니다",
+        "img_compressed": "이미지가 {w}×{h}로 압축되었습니다",
         "spinner_voice": "음성 인식 중...",
         "warn_voice_fail": "음성 인식 실패: {e}",
         "warn_vision_model": "이미지 분석은 gpt-4o / gpt-4o-mini 모델만 지원합니다. (현재: {model})",
+        "btn_regenerate": "↺  다시 생성",
         "role_user": "사용자",
         "role_assistant": "도우미",
         "img_note": " [이미지 첨부]",
@@ -156,12 +181,12 @@ def t(key):
 
 def get_system_prompt():
     return (
-        f"You are an expert travel assistant. Help users with:\n"
-        f"- Personalized travel destination recommendations based on budget, duration, and style\n"
-        f"- Day-by-day travel itineraries\n"
-        f"- Local restaurant and attraction recommendations by genre, atmosphere, and budget\n"
-        f"- Transportation options (flights, trains, buses) and route guidance\n\n"
-        f"Always provide specific, actionable recommendations with place names, estimated costs where relevant, "
+        "You are an expert travel assistant. Help users with:\n"
+        "- Personalized travel destination recommendations based on budget, duration, and style\n"
+        "- Day-by-day travel itineraries\n"
+        "- Local restaurant and attraction recommendations by genre, atmosphere, and budget\n"
+        "- Transportation options (flights, trains, buses) and route guidance\n\n"
+        "Always provide specific, actionable recommendations with place names, estimated costs where relevant, "
         f"and practical tips. {t('system_lang')}"
     )
 
@@ -193,6 +218,7 @@ def extract_locations(client, text):
         return []
 
 
+@st.cache_data(show_spinner=False)
 def geocode_place(name):
     try:
         location = geolocator.geocode(name, timeout=5)
@@ -203,6 +229,77 @@ def geocode_place(name):
     return None
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_exchange_rate(base, target):
+    try:
+        r = requests.get(
+            f"https://api.frankfurter.app/latest?from={base}&to={target}", timeout=5
+        )
+        return r.json()["rates"][target]
+    except Exception:
+        return None
+
+
+def compress_image(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes))
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    orig_size = img.size
+    w, h = img.size
+    if max(w, h) > IMAGE_MAX_PX:
+        ratio = IMAGE_MAX_PX / max(w, h)
+        img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue(), "image/jpeg", img.size, orig_size
+
+
+def _text_of(content):
+    if isinstance(content, list):
+        return " ".join(p["text"] for p in content if p["type"] == "text")
+    return content
+
+
+def _has_image(content):
+    return isinstance(content, list) and any(p["type"] == "image_url" for p in content)
+
+
+def generate_pdf(messages):
+    pdf = FPDF()
+    pdf.set_margins(20, 20, 20)
+    pdf.add_page()
+    font_set = False
+    for fname in ("DejaVuSans.ttf", "NotoSans-Regular.ttf"):
+        try:
+            pdf.add_font("Unicode", fname=fname, uni=True)
+            pdf.set_font("Unicode", size=11)
+            font_set = True
+            break
+        except Exception:
+            pass
+    if not font_set:
+        pdf.set_font("Helvetica", size=11)
+
+    pdf.set_font_size(16)
+    pdf.cell(0, 10, "Travel Chatbot - Chat History", ln=True)
+    pdf.ln(4)
+
+    for m in messages:
+        role = t("role_user") if m["role"] == "user" else t("role_assistant")
+        content = _text_of(m["content"]) if isinstance(m["content"], list) else m["content"]
+        img_suffix = t("img_note") if _has_image(m["content"]) else ""
+
+        pdf.set_font_size(8)
+        pdf.set_text_color(120, 120, 120)
+        pdf.cell(0, 5, f"[{role}{img_suffix}]", ln=True)
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_font_size(10)
+        pdf.multi_cell(0, 6, content)
+        pdf.ln(3)
+
+    return bytes(pdf.output())
+
+
 def render_map(locations):
     lats = [p["lat"] for p in locations]
     lngs = [p["lng"] for p in locations]
@@ -210,18 +307,32 @@ def render_map(locations):
     zoom = 12 if len(locations) == 1 else 4
 
     m = folium.Map(location=center, zoom_start=zoom)
-    for place in locations:
+
+    if len(locations) > 1:
+        folium.PolyLine(
+            [[p["lat"], p["lng"]] for p in locations],
+            color="#4f46e5", weight=2.5, opacity=0.7, dash_array="6 4",
+        ).add_to(m)
+
+    for i, place in enumerate(locations, 1):
+        gmaps_url = (
+            f"https://www.google.com/maps/search/?api=1"
+            f"&query={place['lat']},{place['lng']}"
+        )
+        popup_html = (
+            f"<b>{place['name']}</b><br>"
+            f"<a href='{gmaps_url}' target='_blank'>Google Maps →</a>"
+        )
         folium.Marker(
             location=[place["lat"], place["lng"]],
-            tooltip=place["name"],
-            popup=folium.Popup(place["name"], max_width=200),
+            tooltip=f"{i}. {place['name']}",
+            popup=folium.Popup(popup_html, max_width=220),
             icon=folium.Icon(color="red", icon="map-marker"),
         ).add_to(m)
     return m
 
 
 def send_message(client, model, prompt, image_b64=None, image_mime=None):
-    """Append user message, call API, return response. Raises on API error."""
     if image_b64:
         content = [
             {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}},
@@ -253,7 +364,7 @@ def send_message(client, model, prompt, image_b64=None, image_mime=None):
     return response
 
 
-# ── Language selector (always visible, before API key check) ─────────────────
+# ── Language selector ────────────────────────────────────────────────────────
 
 if "lang" not in st.session_state:
     st.session_state.lang = "en"
@@ -361,19 +472,29 @@ else:
             else:
                 st.warning(t("warn_no_destination"))
 
+        # ── Currency Converter ────────────────────────────────────────────
+        st.divider()
+        st.header(t("currency_header"))
+        cur_amount = st.number_input(t("currency_amount"), min_value=1, value=100, step=10)
+        c1, c2 = st.columns(2)
+        with c1:
+            cur_from = st.selectbox(t("currency_from"), CURRENCIES, index=CURRENCIES.index("USD"), key="cur_from")
+        with c2:
+            cur_to = st.selectbox(t("currency_to"), CURRENCIES, index=CURRENCIES.index("KRW"), key="cur_to")
+        if cur_from != cur_to:
+            rate = fetch_exchange_rate(cur_from, cur_to)
+            if rate:
+                st.success(t("currency_result").format(
+                    amount=cur_amount, fc=cur_from, result=cur_amount * rate, tc=cur_to
+                ))
+            else:
+                st.warning(t("currency_err"))
+
         # ── Export Chat ───────────────────────────────────────────────────
         st.divider()
         st.header(t("export_header"))
 
         if "messages" in st.session_state and st.session_state.messages:
-            def _text_of(content):
-                if isinstance(content, list):
-                    return " ".join(p["text"] for p in content if p["type"] == "text")
-                return content
-
-            def _has_image(content):
-                return isinstance(content, list) and any(p["type"] == "image_url" for p in content)
-
             export_msgs = [
                 {
                     "role": m["role"],
@@ -400,6 +521,25 @@ else:
                 file_name="chat_history.txt",
                 mime="text/plain",
             )
+
+            try:
+                pdf_bytes = generate_pdf(export_msgs)
+                st.download_button(
+                    label=t("btn_download_pdf"),
+                    data=pdf_bytes,
+                    file_name="chat_history.pdf",
+                    mime="application/pdf",
+                )
+            except Exception:
+                pass
+
+            st.divider()
+            if st.button(t("btn_clear_chat"), use_container_width=True, type="secondary"):
+                st.session_state.messages = []
+                st.session_state.locations = []
+                st.session_state.pending_image = None
+                st.session_state.pending_prompt = None
+                st.rerun()
         else:
             st.caption(t("no_messages"))
 
@@ -431,8 +571,8 @@ else:
                     st.session_state.locations = []
                     st.rerun()
 
-    # Chat messages
-    for message in st.session_state.messages:
+    # Chat messages with copy button
+    for i, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             content = message["content"]
             if isinstance(content, list):
@@ -443,8 +583,33 @@ else:
                         st.markdown(part["text"])
             else:
                 st.markdown(content)
+            with st.popover("📋", use_container_width=False):
+                st.code(_text_of(content), language=None)
 
-    # Resolve pending prompt from quick-action buttons
+    # Regenerate button
+    if (
+        st.session_state.messages
+        and st.session_state.messages[-1]["role"] == "assistant"
+    ):
+        if st.button(t("btn_regenerate"), key="regenerate"):
+            st.session_state.messages.pop()
+            last_user = st.session_state.messages.pop()
+            raw = last_user["content"]
+            if isinstance(raw, list):
+                st.session_state.pending_prompt = " ".join(
+                    p["text"] for p in raw if p["type"] == "text"
+                )
+                img_parts = [p for p in raw if p["type"] == "image_url"]
+                if img_parts:
+                    data_url = img_parts[0]["image_url"]["url"]
+                    mime = data_url.split(";")[0].split(":")[1]
+                    b64 = data_url.split(",")[1]
+                    st.session_state.pending_image = {"b64": b64, "mime": mime}
+            else:
+                st.session_state.pending_prompt = raw
+            st.rerun()
+
+    # Resolve pending prompt
     active_prompt = st.session_state.pending_prompt
     if active_prompt:
         st.session_state.pending_prompt = None
@@ -457,11 +622,14 @@ else:
         )
     if uploaded_file:
         image_bytes = uploaded_file.read()
+        compressed, mime, new_size, orig_size = compress_image(image_bytes)
         st.session_state.pending_image = {
-            "b64": base64.b64encode(image_bytes).decode(),
-            "mime": uploaded_file.type,
+            "b64": base64.b64encode(compressed).decode(),
+            "mime": mime,
         }
-        st.image(image_bytes, width=220, caption=t("img_caption"))
+        st.image(compressed, width=220, caption=t("img_caption"))
+        if new_size != orig_size:
+            st.caption(t("img_compressed").format(w=new_size[0], h=new_size[1]))
 
     # Voice input
     col_input, col_mic = st.columns([11, 1])
