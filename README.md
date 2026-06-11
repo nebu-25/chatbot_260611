@@ -10,6 +10,8 @@ A Streamlit chatbot app powered by OpenAI's GPT models.
 - **Streaming responses** — assistant replies are streamed in real time
 - **Conversation history** — messages persist across reruns within a session
 - **Export chat** — download the conversation as a JSON or plain text file
+- **Error handling** — user-friendly messages for invalid API key, rate limit, network errors, and other API failures
+- **Conversation length limit** — automatically trims to the last 20 messages to prevent token limit errors
 
 ## How to run
 
