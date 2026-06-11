@@ -7,9 +7,10 @@ An AI-powered travel assistant built with Streamlit and OpenAI's GPT models.
 ## Features
 
 ### Chat
-- **Language toggle** — switch between English and 한국어 from the sidebar; all UI and AI responses follow the selected language
+- **Language toggle** — switch between English and 한국어 from the sidebar; all UI and AI responses follow the selected language; API key is preserved across language switches
 - **Model selection** — choose between GPT-4o-mini (default), GPT-4o, and GPT-3.5-turbo
-- **Streaming responses** — assistant replies are streamed in real time
+- **Streaming responses** — assistant replies are streamed in real time via a background thread
+- **Stop generation** — click **⬛ Stop generating** to interrupt a response mid-stream; the partial reply is saved to the conversation history
 - **Voice input** — click the microphone button, speak, and the app transcribes your speech via OpenAI Whisper and sends it automatically
 - **Image input** — attach a JPG, PNG, or WebP image (auto-compressed to ≤1024px); GPT-4o / GPT-4o-mini will analyze it alongside your message
 - **Copy button** — every message has a 📋 popover to copy the text to clipboard
@@ -20,6 +21,7 @@ An AI-powered travel assistant built with Streamlit and OpenAI's GPT models.
 - **Error handling** — user-friendly messages for invalid API key, rate limit, network, and API errors
 
 ### Trip Planner (sidebar)
+- **Country & city selector** — choose from 39 countries and ~200 cities across Asia, Europe, the Americas, and more; select "Other" to type a destination manually
 - **Destination recommendations** — personalized suggestions based on budget, duration, and travel style
 - **Itinerary planner** — auto-generated day-by-day itinerary for a given destination and date range
 - **Restaurants & attractions** — local picks filtered by style, atmosphere, and budget
