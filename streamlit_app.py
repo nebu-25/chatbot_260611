@@ -1,6 +1,9 @@
 import json
 import streamlit as st
-from openai import OpenAI
+from openai import OpenAI, AuthenticationError, RateLimitError, APIConnectionError, APIStatusError
+
+# Max messages kept in context before oldest pairs are trimmed
+MAX_MESSAGES = 20
 
 st.title("💬 Chatbot")
 st.write(
@@ -27,7 +30,6 @@ else:
         st.header("Export Chat")
 
         if "messages" in st.session_state and st.session_state.messages:
-            # JSON download
             json_data = json.dumps(st.session_state.messages, ensure_ascii=False, indent=2)
             st.download_button(
                 label="Download as JSON",
@@ -36,7 +38,6 @@ else:
                 mime="application/json",
             )
 
-            # Plain text download
             lines = []
             for m in st.session_state.messages:
                 role = "User" if m["role"] == "user" else "Assistant"
@@ -63,15 +64,33 @@ else:
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        stream = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+        # Trim oldest message pairs when history exceeds MAX_MESSAGES
+        if len(st.session_state.messages) > MAX_MESSAGES:
+            st.session_state.messages = st.session_state.messages[-MAX_MESSAGES:]
 
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+        try:
+            stream = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": m["role"], "content": m["content"]}
+                    for m in st.session_state.messages
+                ],
+                stream=True,
+            )
+
+            with st.chat_message("assistant"):
+                response = st.write_stream(stream)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
+        except AuthenticationError:
+            st.error("Invalid API key. Please check your OpenAI API key and try again.", icon="🔑")
+            st.session_state.messages.pop()
+        except RateLimitError:
+            st.error("Rate limit exceeded. Please wait a moment and try again.", icon="⏳")
+            st.session_state.messages.pop()
+        except APIConnectionError:
+            st.error("Network error. Please check your internet connection and try again.", icon="🌐")
+            st.session_state.messages.pop()
+        except APIStatusError as e:
+            st.error(f"API error ({e.status_code}): {e.message}", icon="⚠️")
+            st.session_state.messages.pop()
