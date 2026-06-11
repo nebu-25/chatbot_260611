@@ -63,3 +63,23 @@ To run locally:
 
 - Python 3.9+
 - OpenAI API key (Chat + Whisper — Whisper is ~$0.006/min; Vision billed per token)
+
+---
+
+## 이슈 관리
+
+### ✅ 해결된 이슈
+
+| 날짜 | 이슈 | 해결 방법 |
+|---|---|---|
+| 2026-06-11 | `.claude/settings.local.json` (Claude Code 설정 파일)이 실수로 커밋·푸시됨 | `git rm --cached`로 추적 해제 후 `.gitignore`에 `.claude/` 추가 |
+| 2026-06-11 | `.gitignore`에 `.claude/` 항목 누락으로 내부 도구 파일 노출 위험 | `.gitignore` 업데이트 완료 |
+| 2026-06-11 | 언어 전환 시 OpenAI API 키가 초기화되는 버그 | 언어 토글 시 API 키 상태 유지하도록 수정 |
+
+### 🔶 알려진 이슈 (미해결)
+
+| 우선순위 | 이슈 | 설명 |
+|---|---|---|
+| 높음 | **Streamlit Cloud 배포 URL 미설정** | README 배지가 기본 템플릿 URL(`chatbot-template.streamlit.app`)을 가리키고 있어 실제 배포 URL로 교체 필요 |
+| 중간 | **환율 API 외부 의존** | Frankfurter API 장애 시 환율 변환 기능 중단 |
+| 낮음 | **PDF 내보내기 한글 폰트 미지원** | PDF 출력 시 한글이 깨질 수 있음 |
