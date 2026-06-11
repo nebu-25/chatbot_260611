@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import folium
@@ -9,6 +10,7 @@ from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 from openai import OpenAI, AuthenticationError, RateLimitError, APIConnectionError, APIStatusError
 
 MAX_MESSAGES = 20
+VISION_MODELS = {"gpt-4o", "gpt-4o-mini"}
 
 SYSTEM_PROMPT = """You are an expert travel assistant. Help users with:
 - Personalized travel destination recommendations based on budget, duration, and style
@@ -73,10 +75,20 @@ def render_map(locations):
     return m
 
 
-def send_message(client, model, prompt):
+def send_message(client, model, prompt, image_b64=None, image_mime=None):
     """Append user message, call API, return response. Raises on API error."""
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    if image_b64:
+        content = [
+            {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}},
+            {"type": "text", "text": prompt},
+        ]
+    else:
+        content = prompt
+
+    st.session_state.messages.append({"role": "user", "content": content})
     with st.chat_message("user"):
+        if image_b64:
+            st.image(f"data:{image_mime};base64,{image_b64}", width=300)
         st.markdown(prompt)
 
     if len(st.session_state.messages) > MAX_MESSAGES:
@@ -188,18 +200,34 @@ else:
         st.header("Export Chat")
 
         if "messages" in st.session_state and st.session_state.messages:
-            json_data = json.dumps(st.session_state.messages, ensure_ascii=False, indent=2)
+            def _text_of(content):
+                if isinstance(content, list):
+                    return " ".join(p["text"] for p in content if p["type"] == "text")
+                return content
+
+            def _has_image(content):
+                return isinstance(content, list) and any(p["type"] == "image_url" for p in content)
+
+            export_msgs = [
+                {
+                    "role": m["role"],
+                    "content": _text_of(m["content"]),
+                    **({"has_image": True} if _has_image(m["content"]) else {}),
+                }
+                for m in st.session_state.messages
+            ]
             st.download_button(
                 label="Download as JSON",
-                data=json_data,
+                data=json.dumps(export_msgs, ensure_ascii=False, indent=2),
                 file_name="chat_history.json",
                 mime="application/json",
             )
 
             lines = []
-            for m in st.session_state.messages:
+            for m in export_msgs:
                 role = "User" if m["role"] == "user" else "Assistant"
-                lines.append(f"[{role}]\n{m['content']}\n")
+                img_note = " [이미지 첨부]" if m.get("has_image") else ""
+                lines.append(f"[{role}{img_note}]\n{m['content']}\n")
             st.download_button(
                 label="Download as Text",
                 data="\n".join(lines),
@@ -215,6 +243,8 @@ else:
         st.session_state.locations = []
     if "pending_prompt" not in st.session_state:
         st.session_state.pending_prompt = None
+    if "pending_image" not in st.session_state:
+        st.session_state.pending_image = None
 
     # Map section
     if st.session_state.locations:
@@ -238,12 +268,32 @@ else:
     # Chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            content = message["content"]
+            if isinstance(content, list):
+                for part in content:
+                    if part["type"] == "image_url":
+                        st.image(part["image_url"]["url"], width=300)
+                    elif part["type"] == "text":
+                        st.markdown(part["text"])
+            else:
+                st.markdown(content)
 
     # Resolve pending prompt from quick-action buttons
     active_prompt = st.session_state.pending_prompt
     if active_prompt:
         st.session_state.pending_prompt = None
+
+    # Image uploader
+    uploaded_file = st.file_uploader(
+        "이미지 첨부", type=["jpg", "jpeg", "png", "webp"], label_visibility="collapsed"
+    )
+    if uploaded_file:
+        image_bytes = uploaded_file.read()
+        st.session_state.pending_image = {
+            "b64": base64.b64encode(image_bytes).decode(),
+            "mime": uploaded_file.type,
+        }
+        st.image(image_bytes, width=220, caption="첨부된 이미지 — 메시지를 보내면 함께 전송됩니다")
 
     # Voice input
     col_input, col_mic = st.columns([11, 1])
@@ -267,29 +317,41 @@ else:
     prompt = active_prompt or text_prompt
 
     if prompt:
-        try:
-            response = send_message(client, model, prompt)
+        pending_img = st.session_state.pending_image
+        if pending_img and model not in VISION_MODELS:
+            st.warning(
+                f"이미지 분석은 gpt-4o / gpt-4o-mini 모델만 지원합니다. (현재: {model})",
+                icon="⚠️",
+            )
+        else:
+            try:
+                response = send_message(
+                    client, model, prompt,
+                    image_b64=pending_img["b64"] if pending_img else None,
+                    image_mime=pending_img["mime"] if pending_img else None,
+                )
+                st.session_state.pending_image = None
 
-            new_places = extract_locations(client, response)
-            added = False
-            for place in new_places:
-                if not any(p["name"] == place for p in st.session_state.locations):
-                    geocoded = geocode_place(place)
-                    if geocoded:
-                        st.session_state.locations.append(geocoded)
-                        added = True
-            if added:
-                st.rerun()
+                new_places = extract_locations(client, response)
+                added = False
+                for place in new_places:
+                    if not any(p["name"] == place for p in st.session_state.locations):
+                        geocoded = geocode_place(place)
+                        if geocoded:
+                            st.session_state.locations.append(geocoded)
+                            added = True
+                if added:
+                    st.rerun()
 
-        except AuthenticationError:
-            st.error("Invalid API key. Please check your OpenAI API key and try again.", icon="🔑")
-            st.session_state.messages.pop()
-        except RateLimitError:
-            st.error("Rate limit exceeded. Please wait a moment and try again.", icon="⏳")
-            st.session_state.messages.pop()
-        except APIConnectionError:
-            st.error("Network error. Please check your internet connection and try again.", icon="🌐")
-            st.session_state.messages.pop()
-        except APIStatusError as e:
-            st.error(f"API error ({e.status_code}): {e.message}", icon="⚠️")
-            st.session_state.messages.pop()
+            except AuthenticationError:
+                st.error("Invalid API key. Please check your OpenAI API key and try again.", icon="🔑")
+                st.session_state.messages.pop()
+            except RateLimitError:
+                st.error("Rate limit exceeded. Please wait a moment and try again.", icon="⏳")
+                st.session_state.messages.pop()
+            except APIConnectionError:
+                st.error("Network error. Please check your internet connection and try again.", icon="🌐")
+                st.session_state.messages.pop()
+            except APIStatusError as e:
+                st.error(f"API error ({e.status_code}): {e.message}", icon="⚠️")
+                st.session_state.messages.pop()
