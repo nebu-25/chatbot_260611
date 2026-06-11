@@ -1,6 +1,9 @@
 import base64
 import io
 import json
+import queue
+import threading
+import time
 import folium
 import requests
 import streamlit as st
@@ -17,6 +20,53 @@ VISION_MODELS = {"gpt-4o", "gpt-4o-mini"}
 IMAGE_MAX_PX = 1024
 CURRENCIES = ["USD", "EUR", "KRW", "JPY", "GBP", "CNY", "AUD", "CAD", "HKD", "SGD", "THB", "VND"]
 
+COUNTRY_CITIES = {
+    # Asia
+    "Cambodia":     ["Phnom Penh", "Siem Reap"],
+    "China":        ["Beijing", "Chengdu", "Guangzhou", "Guilin", "Shanghai", "Xi'an", "Zhangjiajie"],
+    "India":        ["Agra", "Goa", "Jaipur", "Mumbai", "New Delhi", "Varanasi"],
+    "Indonesia":    ["Bali", "Jakarta", "Lombok", "Yogyakarta"],
+    "Japan":        ["Fukuoka", "Hiroshima", "Kyoto", "Nara", "Osaka", "Sapporo", "Tokyo"],
+    "Malaysia":     ["Kuala Lumpur", "Langkawi", "Penang"],
+    "Nepal":        ["Kathmandu", "Pokhara"],
+    "Philippines":  ["Boracay", "Cebu", "Manila", "Palawan"],
+    "Singapore":    ["Singapore"],
+    "South Korea":  ["Busan", "Gyeongju", "Incheon", "Jeju Island", "Jeonju", "Seoul"],
+    "Taiwan":       ["Hualien", "Kaohsiung", "Tainan", "Taichung", "Taipei"],
+    "Thailand":     ["Bangkok", "Chiang Mai", "Koh Samui", "Krabi", "Pattaya", "Phuket"],
+    "Vietnam":      ["Da Nang", "Hanoi", "Ho Chi Minh City", "Hoi An", "Hue", "Nha Trang"],
+    # Middle East & Africa
+    "Egypt":        ["Alexandria", "Aswan", "Cairo", "Hurghada", "Luxor"],
+    "Morocco":      ["Casablanca", "Chefchaouen", "Fez", "Marrakech", "Rabat"],
+    "South Africa": ["Cape Town", "Durban", "Johannesburg"],
+    "UAE":          ["Abu Dhabi", "Dubai"],
+    # Europe
+    "Austria":         ["Innsbruck", "Salzburg", "Vienna"],
+    "Czech Republic":  ["Cesky Krumlov", "Prague"],
+    "France":          ["Bordeaux", "Lyon", "Marseille", "Nice", "Paris", "Strasbourg"],
+    "Germany":         ["Berlin", "Cologne", "Frankfurt", "Hamburg", "Heidelberg", "Munich"],
+    "Greece":          ["Athens", "Crete", "Mykonos", "Rhodes", "Santorini"],
+    "Hungary":         ["Budapest"],
+    "Italy":           ["Florence", "Milan", "Naples", "Rome", "Venice"],
+    "Netherlands":     ["Amsterdam", "Rotterdam", "Utrecht"],
+    "Portugal":        ["Algarve", "Lisbon", "Porto", "Sintra"],
+    "Spain":           ["Barcelona", "Granada", "Ibiza", "Madrid", "Seville", "Valencia"],
+    "Switzerland":     ["Geneva", "Interlaken", "Lucerne", "Zermatt", "Zurich"],
+    "Turkey":          ["Antalya", "Bodrum", "Cappadocia", "Istanbul", "Pamukkale"],
+    "United Kingdom":  ["Bath", "Cambridge", "Edinburgh", "Liverpool", "London", "Manchester", "Oxford"],
+    # Americas & Oceania
+    "Argentina":    ["Buenos Aires", "Mendoza", "Patagonia"],
+    "Australia":    ["Brisbane", "Cairns", "Gold Coast", "Melbourne", "Perth", "Sydney"],
+    "Brazil":       ["Iguazu Falls", "Rio de Janeiro", "Salvador", "São Paulo"],
+    "Canada":       ["Banff", "Montreal", "Quebec City", "Toronto", "Vancouver"],
+    "Mexico":       ["Cancun", "Mexico City", "Oaxaca", "Playa del Carmen", "Tulum"],
+    "New Zealand":  ["Auckland", "Christchurch", "Queenstown", "Wellington"],
+    "Peru":         ["Arequipa", "Cusco", "Lima", "Machu Picchu"],
+    "United States": ["Boston", "Chicago", "Hawaii", "Las Vegas", "Los Angeles", "Miami",
+                      "Nashville", "New Orleans", "New York", "San Francisco", "Seattle", "Washington D.C."],
+}
+_COUNTRY_LIST = [""] + sorted(COUNTRY_CITIES.keys()) + ["__other__"]
+
 TRANSLATIONS = {
     "en": {
         "title": "✈️ Travel Chatbot",
@@ -32,6 +82,11 @@ TRANSLATIONS = {
         "trip_planner_header": "Trip Planner",
         "destination_label": "Destination",
         "destination_placeholder": "e.g. Tokyo, Paris",
+        "country_label": "Country",
+        "city_label": "City",
+        "select_country": "-- Select a country --",
+        "select_city": "-- Select a city --",
+        "destination_other": "Other (type manually)",
         "start_date_label": "Start date",
         "end_date_label": "End date",
         "budget_label": "Budget",
@@ -66,6 +121,7 @@ TRANSLATIONS = {
         "spinner_voice": "Transcribing audio...",
         "warn_voice_fail": "Speech recognition failed: {e}",
         "warn_vision_model": "Image analysis is only supported with gpt-4o / gpt-4o-mini. (Current: {model})",
+        "btn_stop_gen": "⬛  Stop generating",
         "btn_regenerate": "↺  Regenerate",
         "role_user": "User",
         "role_assistant": "Assistant",
@@ -108,6 +164,11 @@ TRANSLATIONS = {
         "trip_planner_header": "여행 플래너",
         "destination_label": "여행지",
         "destination_placeholder": "예: 도쿄, 파리",
+        "country_label": "나라",
+        "city_label": "도시",
+        "select_country": "-- 나라 선택 --",
+        "select_city": "-- 도시 선택 --",
+        "destination_other": "직접 입력",
         "start_date_label": "출발일",
         "end_date_label": "귀국일",
         "budget_label": "예산",
@@ -142,6 +203,7 @@ TRANSLATIONS = {
         "spinner_voice": "음성 인식 중...",
         "warn_voice_fail": "음성 인식 실패: {e}",
         "warn_vision_model": "이미지 분석은 gpt-4o / gpt-4o-mini 모델만 지원합니다. (현재: {model})",
+        "btn_stop_gen": "⬛  생성 중지",
         "btn_regenerate": "↺  다시 생성",
         "role_user": "사용자",
         "role_assistant": "도우미",
@@ -332,7 +394,7 @@ def render_map(locations):
     return m
 
 
-def send_message(client, model, prompt, image_b64=None, image_mime=None):
+def start_stream(client, model, prompt, image_b64=None, image_mime=None):
     if image_b64:
         content = [
             {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}},
@@ -355,13 +417,34 @@ def send_message(client, model, prompt, image_b64=None, image_mime=None):
         for m in st.session_state.messages
     ]
 
+    # May raise auth/rate-limit errors immediately — caller handles them
     stream = client.chat.completions.create(
         model=model, messages=api_messages, stream=True
     )
-    with st.chat_message("assistant"):
-        response = st.write_stream(stream)
-    st.session_state.messages.append({"role": "assistant", "content": response})
-    return response
+
+    chunk_queue: queue.Queue = queue.Queue()
+    stop_event = threading.Event()
+
+    def _run():
+        try:
+            for chunk in stream:
+                if stop_event.is_set():
+                    break
+                delta = chunk.choices[0].delta.content or ""
+                if delta:
+                    chunk_queue.put(delta)
+        except Exception as exc:
+            chunk_queue.put(("__error__", exc))
+        finally:
+            chunk_queue.put(None)  # sentinel
+
+    thread = threading.Thread(target=_run, daemon=True)
+    st.session_state.messages.append({"role": "assistant", "content": ""})
+    st.session_state["_streaming"] = True
+    st.session_state["_chunk_queue"] = chunk_queue
+    st.session_state["_stop_event"] = stop_event
+    st.session_state["_stop_requested"] = False
+    thread.start()
 
 
 # ── Language selector ────────────────────────────────────────────────────────
@@ -385,7 +468,7 @@ with st.sidebar:
 st.title(t("title"))
 st.write(t("intro"))
 
-openai_api_key = st.text_input(t("api_key_label"), type="password")
+openai_api_key = st.text_input(t("api_key_label"), type="password", key="openai_api_key")
 if not openai_api_key:
     st.info(t("api_key_info"), icon="🗝️")
 else:
@@ -403,7 +486,35 @@ else:
         st.divider()
         st.header(t("trip_planner_header"))
 
-        destination = st.text_input(t("destination_label"), placeholder=t("destination_placeholder"))
+        selected_country = st.selectbox(
+            t("country_label"),
+            _COUNTRY_LIST,
+            format_func=lambda x: t("select_country") if x == "" else (t("destination_other") if x == "__other__" else x),
+            key="trip_country",
+        )
+
+        # Reset city when country changes
+        if st.session_state.get("_trip_prev_country") != selected_country:
+            st.session_state["_trip_prev_country"] = selected_country
+            st.session_state["trip_city"] = ""
+
+        if not selected_country:
+            destination = ""
+        elif selected_country == "__other__":
+            destination = st.text_input(
+                t("destination_label"),
+                placeholder=t("destination_placeholder"),
+                key="trip_destination_manual",
+            )
+        else:
+            city_options = [""] + COUNTRY_CITIES[selected_country]
+            selected_city = st.selectbox(
+                t("city_label"),
+                city_options,
+                format_func=lambda x: t("select_city") if x == "" else x,
+                key="trip_city",
+            )
+            destination = f"{selected_city}, {selected_country}" if selected_city else selected_country
         col1, col2 = st.columns(2)
         with col1:
             start_date = st.date_input(t("start_date_label"), value=None)
@@ -551,6 +662,10 @@ else:
         st.session_state.pending_prompt = None
     if "pending_image" not in st.session_state:
         st.session_state.pending_image = None
+    if "_streaming" not in st.session_state:
+        st.session_state["_streaming"] = False
+    if "_stop_requested" not in st.session_state:
+        st.session_state["_stop_requested"] = False
 
     # Map section
     if st.session_state.locations:
@@ -571,8 +686,11 @@ else:
                     st.session_state.locations = []
                     st.rerun()
 
-    # Chat messages with copy button
-    for i, message in enumerate(st.session_state.messages):
+    stream_in_progress = st.session_state.get("_streaming", False)
+
+    # Chat messages with copy button (skip in-progress assistant message)
+    render_up_to = -1 if stream_in_progress else len(st.session_state.messages)
+    for message in st.session_state.messages[:render_up_to]:
         with st.chat_message(message["role"]):
             content = message["content"]
             if isinstance(content, list):
@@ -586,9 +704,83 @@ else:
             with st.popover("📋", use_container_width=False):
                 st.code(_text_of(content), language=None)
 
-    # Regenerate button
+    # ── Streaming section ─────────────────────────────────────────────────────
+    if stream_in_progress:
+        cq: queue.Queue = st.session_state.get("_chunk_queue")
+        stop_ev: threading.Event = st.session_state.get("_stop_event")
+        stop_req = st.session_state.get("_stop_requested", False)
+
+        # Drain all available chunks into session state
+        new_text = ""
+        done = False
+        stream_error = None
+        if cq:
+            while True:
+                try:
+                    item = cq.get_nowait()
+                    if item is None:
+                        done = True
+                        break
+                    elif isinstance(item, tuple) and item[0] == "__error__":
+                        stream_error = item[1]
+                        done = True
+                        break
+                    new_text += item
+                except queue.Empty:
+                    break
+
+        if new_text:
+            st.session_state.messages[-1]["content"] += new_text
+
+        current_text = st.session_state.messages[-1]["content"]
+
+        with st.chat_message("assistant"):
+            msg_ph = st.empty()
+            if done or stop_req:
+                msg_ph.markdown(current_text)
+            else:
+                msg_ph.markdown(current_text + "▌")
+                if st.button(t("btn_stop_gen"), key="stop_gen"):
+                    st.session_state["_stop_requested"] = True
+                    if stop_ev:
+                        stop_ev.set()
+
+        if done or stop_req:
+            final_text = st.session_state.messages[-1]["content"]
+            st.session_state["_streaming"] = False
+            st.session_state["_stop_requested"] = False
+
+            if not final_text:
+                st.session_state.messages.pop()  # remove empty assistant placeholder
+
+            if stream_error and not final_text:
+                st.session_state.messages.pop()  # remove user message too
+                if isinstance(stream_error, AuthenticationError):
+                    st.error(t("err_auth"), icon="🔑")
+                elif isinstance(stream_error, RateLimitError):
+                    st.error(t("err_rate"), icon="⏳")
+                elif isinstance(stream_error, APIConnectionError):
+                    st.error(t("err_connection"), icon="🌐")
+                elif isinstance(stream_error, APIStatusError):
+                    st.error(t("err_api").format(code=stream_error.status_code, message=stream_error.message), icon="⚠️")
+
+            if final_text:
+                new_places = extract_locations(client, final_text)
+                for place in new_places:
+                    if not any(p["name"] == place for p in st.session_state.locations):
+                        geocoded = geocode_place(place)
+                        if geocoded:
+                            st.session_state.locations.append(geocoded)
+
+            st.rerun()
+        else:
+            time.sleep(0.2)
+            st.rerun()
+
+    # Regenerate button (only when not streaming)
     if (
-        st.session_state.messages
+        not stream_in_progress
+        and st.session_state.messages
         and st.session_state.messages[-1]["role"] == "assistant"
     ):
         if st.button(t("btn_regenerate"), key="regenerate"):
@@ -634,7 +826,7 @@ else:
     # Voice input
     col_input, col_mic = st.columns([11, 1])
     with col_input:
-        text_prompt = st.chat_input(t("chat_placeholder"))
+        text_prompt = st.chat_input(t("chat_placeholder"), disabled=stream_in_progress)
     with col_mic:
         audio_bytes = audio_recorder(text="", icon_size="lg", pause_threshold=2.0, key="mic")
 
@@ -652,30 +844,19 @@ else:
 
     prompt = active_prompt or text_prompt
 
-    if prompt:
+    if prompt and not stream_in_progress:
         pending_img = st.session_state.pending_image
         if pending_img and model not in VISION_MODELS:
             st.warning(t("warn_vision_model").format(model=model), icon="⚠️")
         else:
             try:
-                response = send_message(
+                start_stream(
                     client, model, prompt,
                     image_b64=pending_img["b64"] if pending_img else None,
                     image_mime=pending_img["mime"] if pending_img else None,
                 )
                 st.session_state.pending_image = None
-
-                new_places = extract_locations(client, response)
-                added = False
-                for place in new_places:
-                    if not any(p["name"] == place for p in st.session_state.locations):
-                        geocoded = geocode_place(place)
-                        if geocoded:
-                            st.session_state.locations.append(geocoded)
-                            added = True
-                if added:
-                    st.rerun()
-
+                st.rerun()
             except AuthenticationError:
                 st.error(t("err_auth"), icon="🔑")
                 st.session_state.messages.pop()
